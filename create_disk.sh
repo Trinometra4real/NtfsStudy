@@ -1,8 +1,12 @@
 VHD="$(pwd)/storage_disk.img"
 MOUNTP="$(pwd)/VHD"
-SIZE="2M"
-
-sudo dd if=/dev/zero of=$VHD/storage_disk.iso bs=$SIZE count=1  # bs = block size, count = number of blocks
-sudo mkfs -t ext4 $VHD/storage_disk.iso # sudo mkfs -t <file_system_type> <virtual hard disk>
-mkdir $MOUNTP
-sudo mount -o loop $VHD/storage_disk.iso $MOUNTP # mount virtual disk to target Destination
+SIZE="175M"
+rm -f $VHD
+touch $VHD
+sudo dd if=/dev/zero of=$VHD bs=$SIZE count=1  # bs = block size, count = number of blocks
+LOOP=$(sudo losetup -f --show $VHD)
+echo "$LOOP">loop
+echo "Attached to : $LOOP"
+sudo mkfs -t ntfs $LOOP  # sudo mkfs -t <file_system_type> <device mapped>
+mkdir -p $MOUNTP         # create Folder destination if does not exists
+sudo mount $LOOP $MOUNTP # mount virtual disk to target Destination

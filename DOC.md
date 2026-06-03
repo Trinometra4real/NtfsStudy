@@ -4,4 +4,4 @@ MFT -> 16 first records are reserved
 1 -> MFT table clone
 
 
-Record -> Emplacement for file
+Record -> Emplacement for file http://ftp.kolibrios.org/users/Asper/docs/NTFS/ntfsdoc.html#concept_file_record
