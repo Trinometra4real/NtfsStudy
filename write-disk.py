@@ -1,5 +1,5 @@
 import os, sys, json
-from io import BufferedReader
+from io import BufferedReader, BytesIO
 from filerec import *
 
 
@@ -46,6 +46,223 @@ class DiskManagerNtfs:
         units = ["B", "KB", "MB", "GB", "TB", "PB"]
         print("loaded disk of size: ", self.size/2**(10*(dizaine-1)), units[dizaine-1])
 
+    def loadBitmaprec(self):
+        datarun=self.MAPPED_PRIMARY_FR["$Bitmap"]["$DATA"]["attr_var"]["data_run"][0]
+
+        offset =int.from_bytes(bytes.fromhex(datarun["cluster_offset"].replace("0x", "")))
+        length =int.from_bytes(bytes.fromhex(datarun["length"].replace("0x", "")))
+        with open(self.disk_image_path, "rb") as f:
+            f.seek(offset*self.sectors_per_clusters*self.bytes_per_sectors)
+            self.bitmap=f.read(length*self.sectors_per_clusters*self.bytes_per_sectors)
+        
+    def readFolder(self, path)-> list:
+        indx=[]
+        header={}
+        if (path=="/"):
+            data_run=self.MAPPED_PRIMARY_FR["."]["$INDEX_ALLOCATION"]["attr_var"]["data_run"][0]
+            offset_to_indx=int.from_bytes(bytes.fromhex(data_run["cluster_offset"].replace("0x", "")))*self.sectors_per_clusters*self.bytes_per_sectors
+            
+            INDX=None
+            CLUSTER=None
+            viable_clusters=[]
+            with open(self.disk_image_path, "rb") as f:
+                f.seek(offset_to_indx)
+                CLUSTER=f.read(self.bytes_per_sectors*self.sectors_per_clusters*int.from_bytes(bytes.fromhex(data_run["length"].replace("0x", ""))))
+                f.close()
+            
+            offset_to_indx=0
+            if True:
+                f=BytesIO(CLUSTER)
+                
+                offset_to_indx=0
+                f.seek(offset_to_indx)
+                offset=offset_to_indx
+                magic_number=f.read(4)
+
+                usa_array=[]
+                offset+=4
+                if (magic_number.hex()=="494e4458"):
+                    
+                    f.seek(offset)
+                    USA_offset=reversebinary(f.read(2))
+                    offset+=2
+
+                    f.seek(offset)
+                    USA_count=int.from_bytes(reversebinary(f.read(2)))
+                    offset+=2
+
+                    f.seek(offset)
+                    logfile_seq_num=f.read(8)
+                    offset+=8
+
+                    f.seek(offset)
+                    vcn=f.read(8)
+                    offset+=8
+                    # Index_Header
+                    index_header_offset=offset
+
+                    header.update({
+                        "usa_offset":USA_offset.hex(),
+                        "usa_count":USA_count,
+                        "logfile":logfile_seq_num.hex(),
+                        "vcn":vcn.hex()
+                    })
+
+                    f.seek(offset)
+                    entries_offset=reversebinary(f.read(4))
+                    first_entry=int.from_bytes(entries_offset)+offset
+                    offset+=4
+
+                    f.seek(offset)
+                    index_length=int.from_bytes(reversebinary(f.read(4))) # in bytes
+                    offset+=4
+
+                    f.seek(offset)
+                    allocated_size=reversebinary(f.read(4))
+                    offset+=4
+
+                    f.seek(offset)
+                    flag=f.read(1)
+                    offset+=1
+                    
+                    offset=offset_to_indx+int.from_bytes(USA_offset)
+                    
+                    f.seek(offset)
+                    usn = f.read(2)
+                    offset+=2
+                    
+                    f.seek(offset)
+                    
+                    for i in range(1, USA_count+1):
+                        f.seek(offset)
+                        arraybuffer=bytearray(CLUSTER)
+                        if arraybuffer[i*self.bytes_per_sectors-2:i*self.bytes_per_sectors]!=bytearray(b''):
+                            viable_clusters.append(arraybuffer[i*self.bytes_per_sectors-2:i*self.bytes_per_sectors]==bytearray(usn))
+                        else:
+                            viable_clusters.append(False)
+                        
+                        if arraybuffer[i*self.bytes_per_sectors-2:i*self.bytes_per_sectors]==usn:
+                            arraybuffer[i*self.bytes_per_sectors-2:i*self.bytes_per_sectors]=f.read(2)
+                            
+                        CLUSTER=bytes(arraybuffer)
+                        offset+=2
+                    
+                    f=BytesIO(CLUSTER)
+
+                    offset=first_entry
+                    saved_offset=offset
+                    notEmpty=True
+                    
+                    while notEmpty:
+                        
+                        # INDEX_ENTRY
+                        file={}
+                        f.seek(offset)
+                        fileref = f.read(8) # offset 0x00
+                        file["fileref"]=fileref.hex()
+                        offset+=8
+
+                        f.seek(offset)
+                        entry_length=int.from_bytes(reversebinary(f.read(2))) # offset 0x08
+                        offset+=2
+
+                        f.seek(offset)
+                        key_length=int.from_bytes(reversebinary(f.read(2))) # offset 0x0A
+                        offset+=2
+
+                        f.seek(offset)
+                        entry_flags=reversebinary(f.read(2)) # offset 0x0C
+                        offset+=2
+                        
+                        if int.from_bytes(entry_flags) & 0x02:
+                            notEmpty=False
+                            print("last index reached : ", offset)
+                            break
+
+                        offset+=2 # Padding
+
+                        # FILE NAME KEY
+
+                        f.seek(offset)
+                        parent_dir_ref=f.read(8)
+                        offset+=8
+
+                        
+                        file["parent_dir_ref"]=reversebinary(parent_dir_ref).hex()
+
+                        f.seek(offset)
+                        creation_time=reversebinary(f.read(8))
+                        offset+=8
+
+                        file["creation_time"]=int.from_bytes(creation_time)
+
+                        f.seek(offset)
+                        file_edit_time=reversebinary(f.read(8))
+                        file["file_edit_time"]=int.from_bytes(file_edit_time)
+                        offset+=8
+
+                        f.seek(offset)
+                        mft_edit_time=reversebinary(f.read(8))
+                        offset+=8
+
+                        file["mft_edit_time"]=int.from_bytes(mft_edit_time)
+
+                        f.seek(offset)
+                        accessed_time=reversebinary(f.read(8))
+                        offset+=8
+
+                        file["accessed_time"]=int.from_bytes(accessed_time)
+
+                        f.seek(offset)
+                        allocated_size=reversebinary(f.read(8))
+                        offset+=8
+
+                        file["allocated_size"]=allocated_size.hex()
+
+                        f.seek(offset)
+                        real_size=reversebinary(f.read(8))
+                        offset+=8
+
+                        file["real_size"]=real_size.hex()
+
+                        f.seek(offset)
+                        file_attr=f.read(4)
+                        offset+=4
+
+                        file["file_attr"]=file_attr.hex()
+
+                        f.seek(offset)
+                        ea_reparse_val=f.read(4)
+                        offset+=4
+
+                        file["ea_reparse_val"]=ea_reparse_val.hex()
+
+                        f.seek(offset)
+                        filename_length=f.read(1)
+                        offset+=1
+
+                        file["filename_length"]=int.from_bytes(filename_length)
+
+                        f.seek(offset)
+                        filename_namespace=f.read(1)
+                        offset+=1
+
+                        file["filename_namespace"]=filename_namespace.hex()
+
+                        f.seek(offset)
+                        filename=f.read(2*int.from_bytes(filename_length)).decode("UTF-16LE")
+                        offset+=2*int.from_bytes(filename_length)
+
+                        file["name"]=filename
+                        print(file)
+                        file["end_offset"]=saved_offset+entry_length
+                        indx.append(file)
+                        saved_offset+=entry_length
+                        offset=saved_offset
+        else:
+            pass
+        return indx
+
     def format(self):
         with open(self.disk_image_path, "wb") as f:
             f.seek(0)
@@ -91,12 +308,14 @@ class DiskManagerNtfs:
         for i in range(0, 12):
 
             filerecord = FileRecord(open(self.disk_image_path, "rb"), FRoffset)
-            FRoffset+=filerecord.allocated_size_of_filerec
+            FRoffset+=2*self.bytes_per_sectors
+            print("Added: ", filerecord.Attributes["$FILE_NAME"]["attr_var"]["filename"])
             self.MAPPED_PRIMARY_FR.update({filerecord.Attributes["$FILE_NAME"]["attr_var"]["filename"]:filerecord.Attributes})
             
         print("Mapped ",self.MAPPED_PRIMARY_FR.keys().__len__(), " filerec")
         with open("dumpDiskManagerFileRecs.json", "w") as f:
             f.write(json.dumps(self.MAPPED_PRIMARY_FR))
+
     def scrawl_disk(self, wordlist_magic_number:dict):
         with open(self.disk_image_path, "rb") as f:
             pass
@@ -110,6 +329,9 @@ print("MTF file is located at sector: ", DMN.sectors_per_clusters*DMN.MFT_cluste
 print("MTF mirror is located at sector : ", DMN.sectors_per_clusters*DMN.MFT_Mirr_cluster_num)
 
 DMN.loadPrimaryFr()
+DMN.loadBitmaprec()
+with open("dumprootfiles.json", "w") as f:
+    f.write(json.dumps(DMN.readFolder("/")))
 
 def test():
     try : 
@@ -118,6 +340,7 @@ def test():
     except Exception as e:
         print(e)
 data = DMN.read_sector(int(sys.argv[1]))
+test()
 
 if data == b"":
     print("Sector out of buffer size")
