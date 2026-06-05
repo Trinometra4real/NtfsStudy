@@ -1,4 +1,4 @@
-from io import BufferedReader
+from io import BufferedReader, BytesIO
 from datetime import datetime, timedelta
 
 
@@ -12,12 +12,145 @@ class Attribute:
     length_=0
     attr_map={}
     mapp={}
-    
+
+    @staticmethod
+    def parseI30(bytes_buffer)->dict:
+        f=BytesIO(bytes_buffer)
+        index={}
+        offset=0
+        saved_offset=0
+        
+        
+        # INDEX_ENTRY
+        file={}
+        f.seek(offset)
+        fileref = reversebinary(f.read(8)) # offset 0x00
+        file["fileref"]=fileref.hex()
+        
+        offset+=8
+        g=BytesIO(fileref)
+        g.seek(0)
+        seq_num=g.read(2)
+        g.seek(2)
+        mft_record=g.read(6)
+        g.close()
+
+        file["seq_num"]=seq_num.hex()
+        file["mft_record"]=mft_record.hex()
+        f.seek(offset)
+        entry_length=int.from_bytes(reversebinary(f.read(2))) # offset 0x08
+        offset+=2
+
+        f.seek(offset)
+        key_length=int.from_bytes(reversebinary(f.read(2))) # offset 0x0A
+        offset+=2
+
+        f.seek(offset)
+        entry_flags=reversebinary(f.read(2)) # offset 0x0C
+        offset+=2
+        file["entry_flag"]=entry_flags.hex()
+        
+
+        if (entry_length==24):
+            
+            file["type"]="VCN"
+            f.seek(offset)
+            VCN=reversebinary(f.read(8))
+            file["VCN"]="0x"+VCN.hex()
+            file["end_offset"]=saved_offset+entry_length
+            index["vcn"]=file
+            
+            
+        else:
+            offset+=2 # Padding
+            file["type"]="FILE_NAME"
+            
+            # FILE NAME KEY
+
+            f.seek(offset)
+            parent_dir_ref=reversebinary(f.read(8))
+            offset+=8
+
+            
+            file["parent_dir_ref"]=parent_dir_ref.hex()
+
+            f.seek(offset)
+            creation_time=reversebinary(f.read(8))
+            offset+=8
+
+            file["creation_time"]=int.from_bytes(creation_time)
+
+            f.seek(offset)
+            file_edit_time=reversebinary(f.read(8))
+            file["file_edit_time"]=int.from_bytes(file_edit_time)
+            offset+=8
+
+            f.seek(offset)
+            mft_edit_time=reversebinary(f.read(8))
+            offset+=8
+
+            file["mft_edit_time"]=int.from_bytes(mft_edit_time)
+
+            f.seek(offset)
+            accessed_time=reversebinary(f.read(8))
+            offset+=8
+
+            file["accessed_time"]=int.from_bytes(accessed_time)
+
+            f.seek(offset)
+            allocated_size=reversebinary(f.read(8))
+            offset+=8
+
+            file["allocated_size"]=allocated_size.hex()
+
+            f.seek(offset)
+            real_size=reversebinary(f.read(8))
+            offset+=8
+
+            file["real_size"]=real_size.hex()
+
+            f.seek(offset)
+            file_attr=reversebinary(f.read(4))
+            offset+=4
+
+            file["file_attr"]=file_attr.hex()
+
+            f.seek(offset)
+            ea_reparse_val=f.read(4)
+            offset+=4
+
+            file["ea_reparse_val"]=ea_reparse_val.hex()
+
+            f.seek(offset)
+            filename_length=f.read(1)
+            offset+=1
+
+            file["filename_length"]=int.from_bytes(filename_length)
+
+            f.seek(offset)
+            filename_namespace=f.read(1)
+            offset+=1
+
+            file["filename_namespace"]=filename_namespace.hex()
+
+            f.seek(offset)
+            filename=f.read(2*int.from_bytes(filename_length)).decode("UTF-16LE")
+            offset+=2*int.from_bytes(filename_length)
+
+            file["name"]=filename
+            index[filename]=file
+            file["end_offset"]=saved_offset+entry_length
+            
+
+        
+        return index
+
     def __init__(self, f:BufferedReader, init_attr_offset:int):
         self.attr_mapp={}
         self.mapp={}
         content={}
         offset=init_attr_offset
+        
         
         content.update({"offset":"0x"+offset.to_bytes(4, 'big', signed=False).hex()})
         f.seek(offset)
@@ -70,7 +203,7 @@ class Attribute:
         f.seek(offset)
         non_resident_flag=f.read(1) # offet 08
         offset+=1
-        content.update({"resident": non_resident_flag==0})
+        content.update({"resident": int.from_bytes(non_resident_flag)==0})
         
         f.seek(offset)
         name_length=int.from_bytes(f.read(1)) # offset 09
@@ -106,7 +239,7 @@ class Attribute:
             f.seek(offset)
             indexed_flag=f.read(1) # offset 16
             content.update({"indexed_flag": "0x"+indexed_flag.hex()})
-
+            offset+=1
             
             if (name_offset==0):
                 name=None
@@ -300,9 +433,11 @@ class Attribute:
                 
                 
                 
-        elif type_==(9*16): # INDEX_ROOT
+        elif type_==(9*16): # INDEX_ROOT offset 0x5548
             index_root={}
+            index_root_offset=offset
             f.seek(offset)
+            
             entry_attribute_type=reversebinary(f.read(4))
             index_root.update({"attr_type":"0x"+entry_attribute_type.hex()})
             offset+=4
@@ -321,6 +456,7 @@ class Attribute:
             cluster_per_index_record=int.from_bytes(reversebinary(f.read(4)))
             index_root.update({"cluster_per_index_record":cluster_per_index_record})
             offset+=4 # 3 bytes of padding
+
             saved_offset_header=offset
             index_header={}
             f.seek(offset)
@@ -334,19 +470,50 @@ class Attribute:
             offset+=4
 
             f.seek(offset)
-            indexentry_allocated_size=int.from_bytes(reversebinary(f.read(4)))
-            index_header.update({"indexentry_allocated_size":indexentry_allocated_size})
+            allocated_size=int.from_bytes(reversebinary(f.read(4)))
+            index_header.update({"allocated_size":allocated_size})
             offset+=4
 
             f.seek(offset)
             Flags=reversebinary(f.read(1))
             index_header.update({"Flags":"0x"+Flags.hex()})
             offset+=4 # 3 bytes of padding
+            
+            index_entries={}
             offset=saved_offset_header+int.from_bytes(offset_to_first_entry)
-            index_entries=[]
-            for i in range(0, total_indexentries_size//indexentry_allocated_size):
-                f.seek(offset+i*indexentry_allocated_size)
-                index_entries.append("0x"+f.read(indexentry_allocated_size).hex())
+            saved_offset=offset
+            # First Entry 0x5568
+            
+            if (content["attr_name"]=="$I30"):
+                while True:
+                    f.seek(offset+8)
+                    entry__len__ = int.from_bytes(reversebinary(f.read(2)))
+                    f.seek(offset)
+                    attr_entry=Attribute.parseI30(f.read(entry__len__))
+                    
+                    
+                    f.seek(offset+12)
+                    flag=f.read(1)
+                    offset+=entry__len__
+                  
+                    if (int.from_bytes(flag) & 0x02):
+                        break
+                    if (int.from_bytes(flag)==0 or int.from_bytes(flag) & 0x01):
+                        index_entries.update(attr_entry)
+            else:
+                for i in range(0, total_indexentries_size//allocated_size):
+                   while True:
+                    f.seek(offset+8)
+                    entry__len__ = int.from_bytes(reversebinary(f.read(2)))
+                    f.seek(offset)
+                    index_entries.update({"content" :f.read(entry__len__).hex()})
+                    
+                    
+                    f.seek(offset+12)
+                    flag=f.read(1)
+                    offset+=entry__len__
+                    if (int.from_bytes(flag) & 0x02):
+                        break
 
 
             attr_values.update({"index_root":index_root})
@@ -407,9 +574,6 @@ class Attribute:
         self.attr_mapp={type_str:self.mapp}
         
 
-
-        
-
 class FileRecord:
     Attributes={}
     offset_to_update_sequence=0
@@ -425,9 +589,37 @@ class FileRecord:
     is_filerec=False
     is_file=False
     is_directory=False
-    def __init__(self, f:BufferedReader, offset:int):
+    def __init__(self, f:BufferedReader, offset:int, size:int):
         self.Attributes={}
         startingpoint=0+offset
+
+        f.seek(offset)
+        file_rec=f.read(size)
+
+        f = BytesIO(file_rec)
+        f.seek(int.from_bytes(b'\x30'))
+        usn = f.read(2)
+        f.seek(int.from_bytes(b'\x32'))
+        replace_one=f.read(2)
+        f.seek(int.from_bytes(b'\x34'))
+        replace_two=f.read(2)
+
+        buffer_array = bytearray(file_rec)
+        self.is_filerec=(bytes(buffer_array[512-2:512])==bytearray(usn))
+        print("buffer is :",buffer_array[512-2:512])
+        print("usn is: ", usn)
+        if (buffer_array[512-2:512]==bytearray(usn)):
+            buffer_array[512-2:512] = bytearray(replace_one)
+        
+        print("buffer is :",buffer_array[512-2:512])
+        if (buffer_array[1024-2:1024]==bytearray(usn)):
+            buffer_array[1024-2:1024]=bytearray(replace_two)
+
+        print("is it filerec ? : ", self.is_filerec)
+        file_rec = bytes(buffer_array)
+        f = BytesIO(file_rec)
+        startingpoint=0
+        offset=0
         f.seek(startingpoint)
         raw=f.read(4)
         try:
